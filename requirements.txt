@@ -3,3 +3,4 @@ gunicorn==22.0.0
 pdfplumber==0.11.4
 docx2txt==0.8
 openai==1.40.6
+httpx==0.27.2   # 关键：与 openai 1.40.6 兼容，避免 httpx 0.28+ 的 proxies 参数报错
