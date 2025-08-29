@@ -1,9 +1,8 @@
-<!-- templates/results.html -->
 <!doctype html>
 <html lang="zh">
 <head>
   <meta charset="utf-8" />
-  <title>匹配结果（流式）</title>
+  <title>匹配结果</title>
   <link href="/static/style.css" rel="stylesheet" />
   <style>
     table{width:100%;border-collapse:collapse}
@@ -42,9 +41,8 @@
   <table id="tb" style="margin-top:12px">
     <thead>
       <tr>
-        <th>文件名</th><th>姓名</th><th>年龄</th><th>教育背景</th><th>履历概要</th><th>亮点</th>
-        <th>匹配度</th><th>匹配度分析</th><th>证据</th><th>状态</th>
-        <th>技能</th><th>教育</th><th>经验</th><th>语言</th><th>稳定性</th>
+        <th>文件名</th><th>姓名</th><th>年龄</th><th>教育背景</th>
+        <th>履历概要</th><th>亮点</th><th>匹配度</th><th>匹配度分析</th><th>证据</th><th>状态</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -58,7 +56,6 @@
   function esc(s){return (s||'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
   function rowHtml(r){
     const d = r.data || {};
-    const ss = d.subscores || {};
     const hl = (d.highlights||[]).join(' | ');
     const ev = (d.evidence||[]).join(' | ');
     const risks = (d.risk_notes||[]).join(' | ');
@@ -74,11 +71,6 @@
       <td>${esc((d.fit_analysis||'').replace(/\\n/g,' '))}</td>
       <td>${esc(ev)}</td>
       <td>${ok?'OK':('<span class="err">ERR</span> ' + esc(risks))}</td>
-      <td>${esc(ss.skills||0)}</td>
-      <td>${esc(ss.education||0)}</td>
-      <td>${esc(ss.experience||0)}</td>
-      <td>${esc(ss.language||0)}</td>
-      <td>${esc(ss.stability||0)}</td>
     </tr>`;
   }
 
