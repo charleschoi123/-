@@ -1,34 +1,37 @@
 import os, io, re, json, csv, time, uuid, threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import Flask, request, render_template, send_file, Response, redirect, url_for
+from flask import Flask, request, render_template, send_file, Response, redirect, url_for, jsonify
 from werkzeug.utils import secure_filename
 
 import docx2txt, pdfplumber
 from openai import OpenAI
 
-# ===== 基础配置 =====
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-OPENAI_BASE_URL  = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
-LLM_MODEL_CHEAP  = os.getenv("LLM_MODEL_CHEAP", "deepseek-chat")
-MAX_FILES        = int(os.getenv("MAX_FILES", "150"))
-MAX_CONTENT_CHARS= int(os.getenv("MAX_CONTENT_CHARS", "40000"))
-MUST_HAVE_CAP    = int(os.getenv("MUST_HAVE_CAP", "60"))
-MAX_WORKERS      = int(os.getenv("MAX_WORKERS", "3"))
+# ===================== 基础配置（来自环境变量） =====================
+DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
+OPENAI_BASE_URL    = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+LLM_MODEL_CHEAP    = os.getenv("LLM_MODEL_CHEAP", "deepseek-chat")
+MAX_FILES          = int(os.getenv("MAX_FILES", "150"))
+MAX_CONTENT_CHARS  = int(os.getenv("MAX_CONTENT_CHARS", "40000"))
+MUST_HAVE_CAP      = int(os.getenv("MUST_HAVE_CAP", "60"))
+MAX_WORKERS        = int(os.getenv("MAX_WORKERS", "3"))
+STREAM_MODE        = os.getenv("STREAM_MODE", "sse")  # "sse" 或 "poll"
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
 app.secret_key = os.getenv("FLASK_SECRET", "dev_secret")
 
+# OpenAI 兼容 DeepSeek
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=OPENAI_BASE_URL)
 
-# ===== 批次内存状态（个人版足够） =====
+# 批次状态（内存版，个人使用足够）
 BATCHES = {}  # {batch_id: {"jd":str,"notes":str,"must":list,"rows":[...], "done":bool, "csv":BytesIO}}
 
 ALLOWED_EXT = {".pdf", ".docx", ".txt", ".doc"}
-def allowed(filename): return any(filename.lower().endswith(ext) for ext in ALLOWED_EXT)
+def allowed(filename: str) -> bool:
+    return any(filename.lower().endswith(ext) for ext in ALLOWED_EXT)
 
-# ---------- 解析：基于“字节blob”，而不是文件句柄 ----------
+# ===================== 解析：以“字节 blob”为输入 =====================
 def parse_text_from_blob(filename: str, blob: bytes) -> str:
     name = secure_filename(filename).lower()
     _, ext = os.path.splitext(name)
@@ -55,20 +58,25 @@ def parse_text_from_blob(filename: str, blob: bytes) -> str:
         content = content[:MAX_CONTENT_CHARS] + "\n[TRUNCATED]"
     return content
 
+# ===================== MUST 规则抽取 =====================
 def extract_must_from_notes(notes: str):
     must = []
     for line in (notes or "").splitlines():
         s = line.strip()
-        if not s: continue
+        if not s:
+            continue
         if re.match(r'^(!|\[?MUST\]?|必须|必需|必备)\s*[:：\-]?', s, flags=re.I):
             s = re.sub(r'^(!|\[?MUST\]?|必须|必需|必备)\s*[:：\-]?\s*', '', s, flags=re.I)
-            if s: must.append(s)
+            if s:
+                must.append(s)
     return must
 
+# 本科入学年→年龄估算
 UNDERGRAD_PAT = re.compile(r'(本科|学士|Bachelor)[^0-9]{0,12}(\d{4})(?:\D{0,3}(\d{4}))?', re.I)
 def estimate_age_from_text(txt: str):
     m = UNDERGRAD_PAT.search(txt or "")
-    if not m: return "不详"
+    if not m:
+        return "不详"
     try:
         start_year = int(m.group(2))
         birth_year = start_year - 18
@@ -76,9 +84,11 @@ def estimate_age_from_text(txt: str):
     except Exception:
         return "不详"
 
+# ===================== 提示词与 LLM 调用 =====================
 def build_prompt(jd_text: str, notes: str, must_list: list[str], resume_text: str):
     sys_prompt = (
         "You are a professional recruiter across industries. "
+        "Evaluate the resume against the JD and notes. "
         f"If any MUST-HAVE is missing, overall score must be <= {MUST_HAVE_CAP}. "
         "Derive criteria from the JD; do not use ATS rubrics. "
         "Return STRICT JSON only. "
@@ -112,81 +122,122 @@ def build_prompt(jd_text: str, notes: str, must_list: list[str], resume_text: st
     """.strip()
     return sys_prompt, user_prompt
 
-def call_llm(sys_prompt, user_prompt, retries=2):
-    for i in range(retries+1):
+def call_llm(sys_prompt: str, user_prompt: str, retries: int = 2):
+    for i in range(retries + 1):
         try:
             resp = client.chat.completions.create(
                 model=LLM_MODEL_CHEAP,
                 messages=[
-                    {"role":"system","content":sys_prompt},
-                    {"role":"user","content":user_prompt},
-                    {"role":"user","content":"Return STRICT JSON only."}
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": "Return STRICT JSON only."},
                 ],
-                temperature=0.2, max_tokens=1200
+                temperature=0.2,
+                max_tokens=1200,
             )
             raw = resp.choices[0].message.content.strip()
-            m = re.search(r'\{.*\}\s*$', raw, re.S)
-            if m: raw = m.group(0)
+            m = re.search(r"\{.*\}\s*$", raw, re.S)
+            if m:
+                raw = m.group(0)
             data = json.loads(raw)
             # 兜底字段
-            data.setdefault("name","未知")
-            data.setdefault("education_brief","")
-            data.setdefault("estimated_age","不详")
-            data.setdefault("summary","")
-            data.setdefault("highlights",[])
-            data.setdefault("fit_analysis","")
-            data.setdefault("overall",0)
-            data.setdefault("evidence",[])
-            data.setdefault("risk_notes",[])
+            data.setdefault("name", "未知")
+            data.setdefault("education_brief", "")
+            data.setdefault("estimated_age", "不详")
+            data.setdefault("summary", "")
+            data.setdefault("highlights", [])
+            data.setdefault("fit_analysis", "")
+            data.setdefault("overall", 0)
+            data.setdefault("evidence", [])
+            data.setdefault("risk_notes", [])
             return True, data
         except Exception as e:
-            if i==retries: return False, {"error":f"LLM error: {e}"}
+            if i == retries:
+                # 把具体错误传回去，便于前端显示
+                return False, {"error": f"{type(e).__name__}: {e}"}
             time.sleep(0.8)
 
-def process_one(blob_item, jd_text, notes, must_list):
+def process_one(blob_item: dict, jd_text: str, notes: str, must_list: list[str]):
     filename = blob_item["filename"]
-    blob     = blob_item["blob"]
+    blob = blob_item["blob"]
+
     text = parse_text_from_blob(filename, blob)
     if not text:
-        return {"filename": filename, "ok": False, "data": {
-            "name":"未知","education_brief":"","estimated_age":"不详","summary":"",
-            "highlights":[],"fit_analysis":"","overall":0,"evidence":[],
-            "risk_notes":[ "解析失败或空文档" ]
-        }}
+        return {
+            "filename": filename,
+            "ok": False,
+            "data": {
+                "name": "未知",
+                "education_brief": "",
+                "estimated_age": "不详",
+                "summary": "",
+                "highlights": [],
+                "fit_analysis": "",
+                "overall": 0,
+                "evidence": [],
+                "risk_notes": ["解析失败或空文档"],
+            },
+        }
+
     sys_p, user_p = build_prompt(jd_text, notes, must_list, text)
     ok, data = call_llm(sys_p, user_p)
-    if ok and (not data.get("estimated_age") or data["estimated_age"]=="不详"):
-        data["estimated_age"] = estimate_age_from_text(text)
-    if not ok:
-        data = {"name":"未知","education_brief":"","estimated_age":"不详","summary":"",
-                "highlights":[],"fit_analysis":"","overall":0,"evidence":[],
-                "risk_notes":[blob_item.get("filename",""), "LLM失败或限流"]}
-    return {"filename": filename, "ok": ok, "data": data}
 
-# ===== 路由 =====
+    if ok and (not data.get("estimated_age") or data["estimated_age"] == "不详"):
+        # 正则兜底年龄估计
+        data["estimated_age"] = estimate_age_from_text(text)
+
+    if not ok:
+        err = data.get("error", "LLM失败")
+        return {
+            "filename": filename,
+            "ok": False,
+            "data": {
+                "name": "未知",
+                "education_brief": "",
+                "estimated_age": "不详",
+                "summary": "",
+                "highlights": [],
+                "fit_analysis": "",
+                "overall": 0,
+                "evidence": [],
+                "risk_notes": [err],
+            },
+        }
+
+    return {"filename": filename, "ok": True, "data": data}
+
+# ===================== 路由 =====================
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
 
-# A. 提交后创建批次（把上传文件读到内存）
+# 提交后创建批次（把上传文件读到内存 blobs），后台并发处理
 @app.route("/start", methods=["POST"])
 def start():
-    jd_text = request.form.get("jd_raw","").strip()
-    notes   = request.form.get("notes","").strip()
+    jd_text = request.form.get("jd_raw", "").strip()
+    notes = request.form.get("notes", "").strip()
 
     uploads = []
-    total_size = 0
     for f in request.files.getlist("resumes"):
-        if not f or not allowed(f.filename): continue
-        b = f.read()            # 👈 这里把字节读出来
+        if not f or not allowed(f.filename):
+            continue
+        b = f.read()  # 读成字节，避免后续句柄被关闭
         uploads.append({"filename": f.filename, "blob": b})
-        total_size += len(b)
-    if not uploads: return "No valid files. Allowed: .pdf, .docx, .txt, .doc", 400
-    if len(uploads) > MAX_FILES: return f"Too many files (>{MAX_FILES}).", 400
+    if not uploads:
+        return "No valid files. Allowed: .pdf, .docx, .txt, .doc", 400
+    if len(uploads) > MAX_FILES:
+        return f"Too many files (>{MAX_FILES}).", 400
 
     batch_id = str(uuid.uuid4())
     must_list = extract_must_from_notes(notes)
-    BATCHES[batch_id] = {"jd": jd_text, "notes": notes, "must": must_list, "rows": [], "done": False, "csv": None}
+    BATCHES[batch_id] = {
+        "jd": jd_text,
+        "notes": notes,
+        "must": must_list,
+        "rows": [],
+        "done": False,
+        "csv": None,
+    }
 
     def run_batch():
         rows = []
@@ -195,39 +246,72 @@ def start():
             for fu in as_completed(futs):
                 r = fu.result()
                 rows.append(r)
-                BATCHES[batch_id]["rows"].append(r)   # 流式推送
-        rows.sort(key=lambda x: x["data"].get("overall",0), reverse=True)
-        # 生成CSV
-        csv_buf = io.StringIO(); w = csv.writer(csv_buf)
-        w.writerow(["filename","name","estimated_age","overall","education_brief","summary","highlights","fit_analysis","risk_notes"])
+                # 供流式/轮询实时读取
+                BATCHES[batch_id]["rows"].append(r)
+
+        rows.sort(key=lambda x: x["data"].get("overall", 0), reverse=True)
+
+        # 生成 CSV
+        csv_buf = io.StringIO()
+        w = csv.writer(csv_buf)
+        w.writerow(
+            [
+                "filename",
+                "name",
+                "estimated_age",
+                "overall",
+                "education_brief",
+                "summary",
+                "highlights",
+                "fit_analysis",
+                "risk_notes",
+            ]
+        )
         for r in rows:
-            d=r["data"]
-            w.writerow([r["filename"], d.get("name",""), d.get("estimated_age",""), d.get("overall",0),
-                        d.get("education_brief",""), d.get("summary",""),
-                        " | ".join(d.get("highlights",[])),
-                        d.get("fit_analysis","").replace("\n"," "),
-                        " | ".join(d.get("risk_notes",[]))])
+            d = r["data"]
+            w.writerow(
+                [
+                    r["filename"],
+                    d.get("name", ""),
+                    d.get("estimated_age", ""),
+                    d.get("overall", 0),
+                    d.get("education_brief", ""),
+                    d.get("summary", ""),
+                    " | ".join(d.get("highlights", [])),
+                    (d.get("fit_analysis", "") or "").replace("\n", " "),
+                    " | ".join(d.get("risk_notes", [])),
+                ]
+            )
         BATCHES[batch_id]["csv"] = io.BytesIO(csv_buf.getvalue().encode("utf-8"))
         BATCHES[batch_id]["done"] = True
 
     threading.Thread(target=run_batch, daemon=True).start()
     return redirect(url_for("results", batch_id=batch_id))
 
-# B. 结果页
+# 结果页（模板里会根据 stream_mode 决定 SSE 还是轮询）
 @app.route("/results/<batch_id>")
 def results(batch_id):
     b = BATCHES.get(batch_id)
-    if not b: return "Batch not found", 404
-    return render_template("results.html", batch_id=batch_id, jd=b["jd"], notes=b["notes"], must=b["must"])
+    if not b:
+        return "Batch not found", 404
+    return render_template(
+        "results.html",
+        batch_id=batch_id,
+        jd=b["jd"],
+        notes=b["notes"],
+        must=b["must"],
+        stream_mode=STREAM_MODE,
+    )
 
-# C. SSE 流式
+# SSE 流式事件
 @app.route("/events/<batch_id>")
 def events(batch_id):
     def gen():
         sent = 0
         while True:
             b = BATCHES.get(batch_id)
-            if not b: break
+            if not b:
+                break
             rows = b["rows"]
             while sent < len(rows):
                 yield f"data: {json.dumps(rows[sent], ensure_ascii=False)}\n\n"
@@ -236,15 +320,50 @@ def events(batch_id):
                 yield "event: done\ndata: end\n\n"
                 break
             time.sleep(0.8)
+
     return Response(gen(), mimetype="text/event-stream")
 
-# D. 下载CSV
+# 轮询：返回当前行与完成状态
+@app.route("/rows/<batch_id>")
+def rows_json(batch_id):
+    b = BATCHES.get(batch_id)
+    if not b:
+        return jsonify({"error": "Batch not found"}), 404
+    return jsonify({"rows": b["rows"], "done": b["done"]})
+
+# 下载 CSV
 @app.route("/download_csv/<batch_id>")
 def download_csv(batch_id):
     b = BATCHES.get(batch_id)
-    if not b or not b["csv"]: return "CSV not ready", 404
+    if not b or not b["csv"]:
+        return "CSV not ready", 404
     b["csv"].seek(0)
-    return send_file(b["csv"], as_attachment=True, download_name=f"results_{batch_id[:8]}.csv", mimetype="text/csv")
+    return send_file(
+        b["csv"],
+        as_attachment=True,
+        download_name=f"results_{batch_id[:8]}.csv",
+        mimetype="text/csv",
+    )
+
+# 诊断：检查 Key/Endpoint/模型是否可用
+@app.route("/diag")
+def diag():
+    info = {
+        "has_key": bool(DEEPSEEK_API_KEY),
+        "base_url": OPENAI_BASE_URL,
+        "model": LLM_MODEL_CHEAP,
+        "max_workers": MAX_WORKERS,
+    }
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL_CHEAP, messages=[{"role": "user", "content": "ping"}], max_tokens=5
+        )
+        info["test"] = "ok"
+    except Exception as e:
+        info["test"] = f"error: {e}"
+    return jsonify(info), 200
+
 
 if __name__ == "__main__":
+    # 本地调试
     app.run(host="0.0.0.0", port=5000, debug=True)
