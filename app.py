@@ -1,12 +1,11 @@
 import os, io, re, json, csv, time, uuid, threading
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, render_template, send_file, Response, redirect, url_for, jsonify
 from werkzeug.utils import secure_filename
 
 import docx2txt, pdfplumber
 from openai import OpenAI
-from openpyxl import Workbook  # ⬅️ Excel 导出
+from openpyxl import Workbook  # Excel 导出
 
 # ===================== 基础配置（来自环境变量） =====================
 DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
@@ -32,6 +31,41 @@ ALLOWED_EXT = {".pdf", ".docx", ".txt", ".doc"}
 def allowed(filename: str) -> bool:
     return any(filename.lower().endswith(ext) for ext in ALLOWED_EXT)
 
+# ============== 小工具：更鲁棒的 JSON 解析 ==============
+def _safe_json_parse(raw: str):
+    """
+    依次尝试：
+    1) 直接 json.loads
+    2) 去除 ```(json) 围栏后再 loads
+    3) 抓取第一个 {...} 块
+    4) 截取从第一个 { 到最后一个 } 的内容
+    """
+    import json, re
+    if raw is None:
+        raise ValueError("empty content")
+    s = raw.strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+
+    s2 = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.I | re.S).strip()
+    try:
+        return json.loads(s2)
+    except Exception:
+        pass
+
+    m = re.search(r"\{.*\}", s, re.S)
+    if m:
+        return json.loads(m.group(0))
+
+    i, j = s.find("{"), s.rfind("}")
+    if i != -1 and j != -1 and j > i:
+        return json.loads(s[i:j+1])
+
+    # 仍失败：抛出 JSONDecodeError
+    return json.loads(s)
+
 # ===================== 解析：以“字节 blob”为输入（含 PDF 兜底） =====================
 def parse_text_from_blob(filename: str, blob: bytes) -> str:
     """
@@ -54,7 +88,7 @@ def parse_text_from_blob(filename: str, blob: bytes) -> str:
             except Exception:
                 content = ""
 
-            # 2) 内容过短或为空，用 pypdfium2 兜底
+            # 2) 兜底 pypdfium2（文字型 PDF 成功率更高；扫描件仍无解）
             if len(content) < 40:
                 try:
                     import pypdfium2 as pdfium
@@ -156,25 +190,32 @@ def build_prompt(jd_text: str, notes: str, must_list: list[str], resume_text: st
     """.strip()
     return sys_prompt, user_prompt
 
-def call_llm(sys_prompt: str, user_prompt: str, retries: int = 2):
-    for i in range(retries + 1):
+def call_llm(sys_prompt: str, user_prompt: str, retries: int = 3):
+    """
+    更稳健的 LLM 调用：
+    - 强制 JSON 输出（response_format）
+    - 失败退避重试
+    - 解析时做多重兜底
+    """
+    backoff = 0.8
+    last_err = None
+    raw_preview = ""
+    for _ in range(retries):
         try:
             resp = client.chat.completions.create(
                 model=LLM_MODEL_CHEAP,
                 messages=[
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_prompt},
-                    {"role": "user", "content": "Return STRICT JSON only."},
                 ],
-                temperature=0.2,
+                temperature=0.1,
                 max_tokens=1200,
+                response_format={"type": "json_object"},  # 强制 JSON
             )
-            raw = resp.choices[0].message.content.strip()
-            m = re.search(r"\{.*\}\s*$", raw, re.S)
-            if m:
-                raw = m.group(0)
-            data = json.loads(raw)
-            # 兜底字段
+            raw = resp.choices[0].message.content
+            raw_preview = (raw or "")[:200]
+            data = _safe_json_parse(raw or "")
+            # 字段兜底
             data.setdefault("name", "未知")
             data.setdefault("education_brief", "")
             data.setdefault("estimated_age", "不详")
@@ -186,10 +227,11 @@ def call_llm(sys_prompt: str, user_prompt: str, retries: int = 2):
             data.setdefault("risk_notes", [])
             return True, data
         except Exception as e:
-            if i == retries:
-                # 把具体错误传回去，便于前端显示
-                return False, {"error": f"{type(e).__name__}: {e}"}
-            time.sleep(0.8)
+            last_err = e
+            time.sleep(backoff)
+            backoff *= 1.6
+    # 全部失败，回传错误 + 原始预览
+    return False, {"error": f"{type(last_err).__name__}: {last_err} | raw: {raw_preview}"}
 
 def process_one(blob_item: dict, jd_text: str, notes: str, must_list: list[str]):
     filename = blob_item["filename"]
@@ -376,7 +418,6 @@ def events(batch_id):
                 yield "event: done\ndata: end\n\n"
                 break
             time.sleep(0.8)
-
     return Response(gen(), mimetype="text/event-stream")
 
 # 轮询：返回当前行与完成状态
@@ -426,7 +467,8 @@ def diag():
     }
     try:
         resp = client.chat.completions.create(
-            model=LLM_MODEL_CHEAP, messages=[{"role": "user", "content": "ping"}], max_tokens=5
+            model=LLM_MODEL_CHEAP, messages=[{"role": "user", "content": "ping"}], max_tokens=5,
+            response_format={"type": "json_object"},
         )
         info["test"] = "ok"
     except Exception as e:
