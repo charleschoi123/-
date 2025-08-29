@@ -9,8 +9,6 @@ from werkzeug.utils import secure_filename
 import docx2txt, pdfplumber
 from openai import OpenAI
 from openpyxl import Workbook
-from openpyxl.chart import RadarChart, Reference
-from openpyxl.chart.marker import DataPoint
 
 # ===================== 基础配置（来自环境变量） =====================
 DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
@@ -31,8 +29,6 @@ app.secret_key = os.getenv("FLASK_SECRET", "dev_secret")
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=OPENAI_BASE_URL)
 
 # 批次状态（内存）
-# SINGLE：{...,"report_lang": "zh|en|bi", rows:[], csv, excel}
-# MULTI ：{...,"report_lang": "zh|en|bi", pairs:[], csv, excel}
 BATCHES = {}
 
 ALLOWED_EXT = {".pdf", ".docx", ".txt", ".doc"}
@@ -129,28 +125,16 @@ def _safe_json_parse(raw: str):
         return _json.loads(s[i:j+1])
     return _json.loads(s)
 
-# --------------------- 语言映射 ---------------------
+# --------------------- 语言映射（无维度列） ---------------------
 HEADERS = {
-    "zh": ["文件名","姓名","年龄","教育背景","履历概要","亮点","匹配度","匹配度分析","证据","风险备注",
-           "技能匹配","教育匹配","经验匹配","语言能力","稳定性"],
-    "en": ["File","Name","Age","Education","Summary","Highlights","Overall","Fit Analysis","Evidence","Risk Notes",
-           "Skills","EducationScore","Experience","Language","Stability"],
+    "zh": ["文件名","姓名","年龄","教育背景","履历概要","亮点","匹配度","匹配度分析","证据","风险备注"],
+    "en": ["File","Name","Age","Education","Summary","Highlights","Overall","Fit Analysis","Evidence","Risk Notes"],
     "bi": ["文件名/File","姓名/Name","年龄/Age","教育/Education","概要/Summary","亮点/Highlights","总分/Overall",
-           "分析/Analysis","证据/Evidence","风险/Risk",
-           "技能/Skills","教育/EduScore","经验/Experience","语言/Language","稳定性/Stability"]
+           "分析/Analysis","证据/Evidence","风险/Risk"]
 }
-DIM_KEYS = ["skills","education","experience","language","stability"]
 
-def label_lang(lang, zh, en):
-    if lang == "en":
-        return en
-    if lang == "bi":
-        return f"{zh}/{en}"
-    return zh  # zh
-
-# --------------------- 提示词与调用（含语言+维度评分） ---------------------
+# --------------------- 提示词与调用（去掉维度评分） ---------------------
 def build_prompt(jd_text: str, notes: str, must_list: list[str], resume_text: str, lang: str = "zh"):
-    # 回复语言指示
     lang_line = {
         "zh": "Answer all fields in Chinese.",
         "en": "Answer all fields in English.",
@@ -161,22 +145,11 @@ def build_prompt(jd_text: str, notes: str, must_list: list[str], resume_text: st
         "You are a professional recruiter across industries. "
         "Evaluate the resume against the JD and notes. "
         f"If any MUST-HAVE is missing, overall score must be <= {MUST_HAVE_CAP}. "
-        "Derive criteria from the JD; do not use canned ATS rubrics. "
+        "Do NOT output any sub-scores or radar dimensions; provide narrative only. "
         "Return STRICT JSON only. "
         "Estimate age ONLY from undergraduate enrollment year (assume 18). If unknown, return '不详'. "
         + lang_line
     )
-
-    # 新增维度评分说明
-    dims = """
-Scoring dimensions (0-100 each):
-- skills: core hard/soft skills relevant to JD
-- education: degree and school alignment to JD
-- experience: industry/domain/years/role relevance
-- language: languages required by JD
-- stability: timeline consistency, tenure, gaps (higher is better)
-Overall can be the model's holistic judgment, but must be <= {cap} if any MUST-HAVE missing.
-""".format(cap=MUST_HAVE_CAP)
 
     user_prompt = f"""
 [JD]
@@ -191,25 +164,16 @@ Overall can be the model's holistic judgment, but must be <= {cap} if any MUST-H
 [RESUME]
 {resume_text}
 
-{dims}
-
 [OUTPUT SCHEMA]
 {{
   "name": "候选人姓名或未知 / Unknown if not found",
   "education_brief": "1-2行教育背景要点 / 1-2 lines education",
   "estimated_age": "约1989年生 或 不详 / ~1989 or Unknown",
-  "summary": "2-3行履历概要 / 2-3 lines summary",
+  "summary": "3-6行履历概要（把技能/教育/经验/语言/稳定性等综合判断写成自然语言，不要数值评分）",
   "highlights": ["亮点1 / highlight1","亮点2 / highlight2"],
-  "fit_analysis": "1-2段，结合JD说明匹配与不匹配点；如缺MUST要指出 / 1-2 paragraphs fit analysis; note missing MUSTs",
-  "subscores": {{
-      "skills": 0-100,
-      "education": 0-100,
-      "experience": 0-100,
-      "language": 0-100,
-      "stability": 0-100
-  }},
+  "fit_analysis": "1-2段，结合JD说明匹配与不匹配点；如缺MUST要指出",
   "overall": 0-100,
-  "evidence": ["“原文摘录A … / quote A …”","“原文摘录B … / quote B …”"],
+  "evidence": ["原文摘录A … / quote A …","原文摘录B … / quote B …"],
   "risk_notes": ["稳定性/时间线缺口等（如有） / risks if any"]
 }}
 Only return JSON.
@@ -235,7 +199,7 @@ def call_llm(sys_prompt: str, user_prompt: str, retries: int = 3):
             raw = resp.choices[0].message.content
             raw_preview = (raw or "")[:200]
             data = _safe_json_parse(raw or "")
-            # 字段兜底
+            # 兜底
             data.setdefault("name", "未知")
             data.setdefault("education_brief", "")
             data.setdefault("estimated_age", "不详")
@@ -245,8 +209,6 @@ def call_llm(sys_prompt: str, user_prompt: str, retries: int = 3):
             data.setdefault("overall", 0)
             data.setdefault("evidence", [])
             data.setdefault("risk_notes", [])
-            ss = data.get("subscores") or {}
-            data["subscores"] = {k:int(ss.get(k,0) or 0) for k in DIM_KEYS}
             return True, data
         except Exception as e:
             last_err = e
@@ -265,7 +227,7 @@ def process_one(blob_item: dict, jd_text: str, notes: str, must_list: list[str],
         return {"filename": filename, "ok": False, "data": {
             "name":"未知","education_brief":"","estimated_age":"不详","summary":"",
             "highlights":[],"fit_analysis":"","overall":0,"evidence":[],
-            "risk_notes":["解析失败或空文档"],"subscores":{k:0 for k in DIM_KEYS}
+            "risk_notes":["解析失败或空文档"]
         }}
     sys_p, user_p = build_prompt(jd_text, notes, must_list, text, lang=report_lang)
     ok, data = call_llm(sys_p, user_p)
@@ -276,47 +238,12 @@ def process_one(blob_item: dict, jd_text: str, notes: str, must_list: list[str],
         return {"filename": filename, "ok": False, "data": {
             "name":"未知","education_brief":"","estimated_age":"不详","summary":"",
             "highlights":[],"fit_analysis":"","overall":0,"evidence":[],
-            "risk_notes":[err],"subscores":{k:0 for k in DIM_KEYS}
+            "risk_notes":[err]
         }}
     return {"filename": filename, "ok": True, "data": data}
 
-# --------------------- Excel 工具：插入雷达图 ---------------------
-def add_radar_for_top(ws, start_row, start_col, top_rows):
-    """
-    在工作表 ws 上，从 start_row/start_col 起，基于 top_rows（[ [name, skills, edu, exp, lang, stab], ... ]）
-    画一个雷达图。每一行一个系列。
-    """
-    if not top_rows:
-        return
-    # 写数据表头
-    headers = ["Name","skills","education","experience","language","stability"]
-    ws.cell(row=start_row, column=start_col, value=headers[0])
-    for i, h in enumerate(headers[1:], start=1):
-        ws.cell(row=start_row, column=start_col+i, value=h)
-    # 写数据
-    for r_i, row in enumerate(top_rows, start=1):
-        for c_i, val in enumerate(row, start=0):
-            ws.cell(row=start_row+r_i, column=start_col+c_i, value=val)
-
-    # 构建雷达图
-    chart = RadarChart()
-    chart.type = "filled"
-    # 类别（维度标签）
-    cats = Reference(ws, min_col=start_col+1, min_row=start_row, max_col=start_col+5, max_row=start_row)
-    # 为每个候选人添加系列
-    for idx in range(len(top_rows)):
-        data_ref = Reference(ws,
-                             min_col=start_col+1, max_col=start_col+5,
-                             min_row=start_row+1+idx, max_row=start_row+1+idx)
-        series = chart.series.append(data_ref)
-        chart.series[idx].title = ws.cell(row=start_row+1+idx, column=start_col).value
-        chart.set_categories(cats)
-    chart.height = 18
-    chart.width = 24
-    ws.add_chart(chart, ws.cell(row=start_row, column=start_col+7).coordinate)
-
 # ===========================================================
-# 路由 ———— 单职位模式（保留）
+# 路由 ———— 单职位模式
 # ===========================================================
 @app.route("/", methods=["GET"])
 def index():
@@ -363,45 +290,33 @@ def start():
 
         # CSV
         csv_buf = io.StringIO(); w = csv.writer(csv_buf)
-        hdr = ["filename","name","estimated_age","overall","education_brief","summary","highlights","fit_analysis",
-               "risk_notes"] + [f"sub_{k}" for k in DIM_KEYS]
+        hdr = ["filename","name","estimated_age","overall","education_brief","summary","highlights","fit_analysis","evidence","risk_notes"]
         w.writerow(hdr)
         for r in rows:
-            d = r["data"]; ss = d.get("subscores",{})
+            d = r["data"]
             w.writerow([
                 r["filename"], d.get("name",""), d.get("estimated_age",""), d.get("overall",0),
                 d.get("education_brief",""), d.get("summary",""),
                 " | ".join(d.get("highlights",[])),
                 (d.get("fit_analysis","") or "").replace("\n"," "),
+                " | ".join(d.get("evidence",[])),
                 " | ".join(d.get("risk_notes",[])),
-                ss.get("skills",0), ss.get("education",0), ss.get("experience",0), ss.get("language",0), ss.get("stability",0)
             ])
         BATCHES[batch_id]["csv"] = io.BytesIO(csv_buf.getvalue().encode("utf-8"))
 
-        # Excel（含雷达图）
+        # Excel
         lang = report_lang
         wb = Workbook(); ws = wb.active; ws.title = "Results"
         ws.append(HEADERS[lang])
         for r in rows:
-            d = r["data"]; ss = d.get("subscores",{})
+            d = r["data"]
             ws.append([
                 r["filename"], d.get("name",""), d.get("estimated_age",""),
                 d.get("education_brief",""), d.get("summary",""),
                 " | ".join(d.get("highlights",[])),
                 d.get("overall",0), d.get("fit_analysis",""),
                 " | ".join(d.get("evidence",[])), " | ".join(d.get("risk_notes",[])),
-                ss.get("skills",0), ss.get("education",0), ss.get("experience",0), ss.get("language",0), ss.get("stability",0)
             ])
-
-        # 雷达图（Top3）
-        top3 = []
-        for r in rows[:3]:
-            d = r["data"]; ss = d.get("subscores",{})
-            nm = d.get("name","") or r["filename"]
-            top3.append([nm, ss.get("skills",0), ss.get("education",0), ss.get("experience",0), ss.get("language",0), ss.get("stability",0)])
-        if top3:
-            add_radar_for_top(ws, start_row=2+len(rows)+2, start_col=2, top_rows=top3)  # 放在表格下方
-
         excel_buf = io.BytesIO(); wb.save(excel_buf); excel_buf.seek(0)
         BATCHES[batch_id]["excel"] = excel_buf
         BATCHES[batch_id]["done"] = True
@@ -461,7 +376,7 @@ def download_excel(batch_id):
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ===========================================================
-# 路由 ———— 多职位矩阵模式
+# 路由 ———— 多职位矩阵模式（保留总分，去掉维度与雷达图）
 # ===========================================================
 MULTI_HTML = """
 <!doctype html><html lang="zh"><head>
@@ -571,18 +486,17 @@ def start_multi():
             sc = x.get("score",0) or 0
             scores[rn][jn] = sc
             if x.get("ok"):
-                d = x["data"]; ss = d.get("subscores",{})
+                d = x["data"]
                 details_by_jd[jn].append({
                     "resume": rn,
                     "name": d.get("name","未知"),
                     "overall": sc,
-                    "ss": [ss.get("skills",0), ss.get("education",0), ss.get("experience",0), ss.get("language",0), ss.get("stability",0)],
                     "summary": (d.get("summary","") or ""),
                     "fit": (d.get("fit_analysis","") or "").replace("\n"," "),
                 })
             else:
                 details_by_jd[jn].append({
-                    "resume": rn,"name":"未知","overall":0,"ss":[0,0,0,0,0],"summary":"","fit":f"ERR: {x.get('error','')}"
+                    "resume": rn,"name":"未知","overall":0,"summary":"","fit":f"ERR: {x.get('error','')}"
                 })
 
         # CSV（矩阵）
@@ -592,7 +506,7 @@ def start_multi():
             w.writerow([rn] + [scores[rn][jn] for jn in jd_names])
         BATCHES[batch_id]["csv"] = io.BytesIO(csv_buf.getvalue().encode("utf-8"))
 
-        # Excel：Matrix + 每 JD sheet（含雷达图）
+        # Excel：Matrix + 每 JD sheet（仅自然语言 + 总分）
         lang = report_lang
         wb = Workbook()
         ws = wb.active; ws.title = "Matrix"
@@ -605,19 +519,10 @@ def start_multi():
             wsj.append(HEADERS[lang])
             sorted_lst = sorted(details_by_jd[jn], key=lambda d: d["overall"], reverse=True)
             for d in sorted_lst:
-                ss = d["ss"]
                 wsj.append([
                     d["resume"], d["name"], "", "", d["summary"], "",
-                    d["overall"], d["fit"], "", "",
-                    ss[0], ss[1], ss[2], ss[3], ss[4]
+                    d["overall"], d["fit"], "", ""
                 ])
-            # 取 Top3 画雷达
-            tops = []
-            for d in sorted_lst[:3]:
-                nm = d["name"] or d["resume"]
-                tops.append([nm, *d["ss"]])
-            if tops:
-                add_radar_for_top(wsj, start_row=2+len(sorted_lst)+2, start_col=2, top_rows=tops)
 
         excel_buf = io.BytesIO(); wb.save(excel_buf); excel_buf.seek(0)
         BATCHES[batch_id]["excel"] = excel_buf
