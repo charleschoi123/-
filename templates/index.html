@@ -1,71 +1,50 @@
+<!-- templates/index.html -->
 <!doctype html>
 <html lang="zh">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Alsos 批量简历分析AI系统</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="/static/style.css" rel="stylesheet">
+  <link href="/static/style.css" rel="stylesheet" />
+  <style>.card{padding:16px;border:1px solid #eee;border-radius:12px;margin:16px 0}</style>
 </head>
 <body>
-  <header class="hero">
-    <div class="brand">
-      <div class="logo">AT</div>
-      <div>
-        <h1>ALSOS TALENT</h1>
-        <p class="tagline">Place clients first • Create lasting value</p>
-      </div>
-    </div>
-  </header>
+<header class="hero">
+  <div class="brand">
+    <div class="logo">AT</div>
+    <h1>Alsos 批量简历分析AI系统</h1>
+  </div>
+</header>
 
-  <form action="/start" method="post" enctype="multipart/form-data" class="container">
-    <div class="card">
-      <h3>1) 上传简历（支持多选）</h3>
-      <input id="fileInput" type="file" name="resumes" multiple accept=".pdf,.docx,.txt,.doc" required />
-      <div class="muted">一次可传多份（PDF/DOCX/TXT/DOC）。扫描版PDF暂不OCR。</div>
-      <div id="fileList" class="filelist"></div>
-      <div id="totalInfo" class="muted"></div>
-    </div>
+<div class="container">
+  <form class="card" method="post" action="/start" enctype="multipart/form-data">
+    <h2>1) 上传简历（支持多选）</h2>
+    <input type="file" name="resumes" multiple accept=".pdf,.docx,.txt,.doc">
+    <p class="muted">一次可传多份（PDF/DOCX/TXT/DOC）。扫描版PDF暂不OCR。</p>
 
-    <div class="card">
-      <h3>2) JD 与补充说明（通用全行业）</h3>
-      <div class="row">
-        <div class="col">
-          <label>JD（粘贴原文即可）</label><br>
-          <textarea name="jd_raw" rows="10" style="width:100%" placeholder="Paste the JD here..."></textarea>
-        </div>
-        <div class="col">
-          <label>补充说明（可标注必须项）</label><br>
-          <textarea name="notes" rows="10" style="width:100%" placeholder="例：&#10;必须：博士学历&#10;必须：有大分子药物研发经验&#10;必须：肿瘤领域&#10;可选：有IND申报经验"></textarea>
-          <div class="muted">规则：以“必须：/必备：/! /[MUST]”开头的行会被识别为 Must-have。</div>
-        </div>
-      </div>
+    <h2>2) JD 与补充说明（通用全行业）</h2>
+    <div>
+      <label>JD 原文（可空，用于参考）</label>
+      <textarea name="jd_raw" rows="10" style="width:100%"></textarea>
+    </div>
+    <div style="margin-top:8px">
+      <label>补充说明（可标注必须项）</label>
+      <textarea name="notes" rows="5" style="width:100%" placeholder="以“必须:”、“!” 或 “[MUST]” 开头的行会被识别为Must-have。"></textarea>
     </div>
 
-    <button type="submit" class="btn-primary">开始分析</button>
+    <div style="margin-top:8px">
+      <label>报告语言</label>
+      <select name="report_lang">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+        <option value="bi">中英双语</option>
+      </select>
+    </div>
+
+    <div class="actions" style="margin-top:16px">
+      <button class="btn" type="submit">开始分析</button>
+      <a class="btn" href="/multi">切换到多职位矩阵模式</a>
+    </div>
   </form>
-
-  <script>
-    const input = document.getElementById('fileInput');
-    const list  = document.getElementById('fileList');
-    const info  = document.getElementById('totalInfo');
-    function humanSize(n){
-      if(n<1024) return n+' B';
-      if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
-      if(n<1024*1024*1024) return (n/1024/1024).toFixed(1)+' MB';
-      return (n/1024/1024/1024).toFixed(1)+' GB';
-    }
-    input.addEventListener('change', ()=>{
-      list.innerHTML = '';
-      let total = 0;
-      [...input.files].forEach(f=>{
-        total += f.size;
-        const div = document.createElement('div');
-        div.className = 'fileitem';
-        div.textContent = `${f.name} · ${humanSize(f.size)}`;
-        list.appendChild(div);
-      });
-      info.textContent = `共 ${input.files.length} 个文件，总大小 ${humanSize(total)}`;
-    });
-  </script>
+</div>
 </body>
 </html>
