@@ -11,8 +11,8 @@
   </header>
 
   <div class="container">
-    <h2>匹配结果（流式）</h2>
-    <p class="muted">本页会在后台持续接收并追加结果；可在完成后下载CSV。</p>
+    <h2>匹配结果</h2>
+    <p class="muted">本页会在后台持续接收并追加结果；完成后可下载 Excel 或 CSV。</p>
 
     <section class="card">
       <h3>JD 概要</h3>
@@ -26,7 +26,8 @@
     </section>
 
     <div class="actions">
-      <a id="csvBtn" class="btn" href="/download_csv/{{ batch_id }}" target="_blank">⬇ 下载CSV（完成后可点）</a>
+      <a id="xlsxBtn" class="btn" href="/download_excel/{{ batch_id }}" target="_blank">⬇ 下载Excel</a>
+      <a id="csvBtn" class="btn" href="/download_csv/{{ batch_id }}" target="_blank">⬇ 下载CSV</a>
       <a class="btn" href="/">返回</a>
     </div>
 
@@ -55,9 +56,7 @@
     const tbody = document.querySelector('#resultTable tbody');
     function esc(s){ return (s||'').toString().replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])) }
 
-    const evt = new EventSource("/events/{{ batch_id }}");
-    evt.onmessage = (e)=>{
-      const r = JSON.parse(e.data);
+    function renderRow(r){
       const d = r.data || {};
       const tr = document.createElement('tr');
       tr.innerHTML = `
@@ -70,15 +69,32 @@
         <td><b>${esc(d.overall)}</b></td>
         <td class="muted">${esc(d.fit_analysis)}</td>
         <td class="muted">${(d.evidence||[]).map(x=>`<div>“${esc(x)}”</div>`).join('')}</td>
-        <td>${r.ok ? '<span class="ok">OK</span>' : '<span class="err">ERR</span>'}</td>
+        <td>
+          ${r.ok ? '<span class="ok">OK</span>' : '<span class="err">ERR</span>'}
+          <div class="muted" style="max-width:260px">
+            ${(d.risk_notes||[]).map(x=>`<div>· ${esc(x)}</div>`).join('')}
+          </div>
+        </td>
       `;
       tbody.appendChild(tr);
-      document.getElementById('status').textContent = `已完成 ${tbody.children.length} 条，仍在进行…`;
-    };
-    evt.addEventListener('done', ()=>{
-      document.getElementById('status').textContent = '已全部完成 ✅';
-    });
-    evt.onerror = ()=>{ document.getElementById('status').textContent = '连接中断，稍后会自动重连或手动刷新。'; };
+      document.getElementById('status').textContent = `已完成 ${tbody.children.length} 条…`;
+    }
+
+    const mode = "{{ stream_mode or 'sse' }}";
+    if (mode === 'sse') {
+      const evt = new EventSource("/events/{{ batch_id }}");
+      evt.onmessage = (e)=> renderRow(JSON.parse(e.data));
+      evt.addEventListener('done', ()=>{ document.getElementById('status').textContent = '已全部完成 ✅'; });
+      evt.onerror = ()=>{ document.getElementById('status').textContent = '连接中断，稍后会自动重连或手动刷新。'; };
+    } else {
+      let seen = 0;
+      const timer = setInterval(async ()=>{
+        const res = await fetch("/rows/{{ batch_id }}");
+        const js = await res.json();
+        while (seen < js.rows.length) { renderRow(js.rows[seen++]); }
+        if (js.done) { clearInterval(timer); document.getElementById('status').textContent = '已全部完成 ✅'; }
+      }, 1200);
+    }
   </script>
 </body>
 </html>
