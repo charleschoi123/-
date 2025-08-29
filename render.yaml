@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: resume-match-mvp
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app -k gthread --threads 4 --timeout 120
+    envVars:
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://api.deepseek.com
+      - key: LLM_MODEL_CHEAP
+        value: deepseek-chat
+      - key: MAX_FILES
+        value: "150"
+      - key: MAX_CONTENT_CHARS
+        value: "40000"
+      - key: FLASK_SECRET
+        generateValue: true
