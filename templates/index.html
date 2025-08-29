@@ -7,13 +7,23 @@
   <link href="/static/style.css" rel="stylesheet">
 </head>
 <body>
-  <h2>Alsos 批量简历分析AI系统</h2>
+  <header class="hero">
+    <div class="brand">
+      <div class="logo">AT</div>
+      <div>
+        <h1>ALSOS TALENT</h1>
+        <p class="tagline">Place clients first • Create lasting value</p>
+      </div>
+    </div>
+  </header>
 
-  <form action="/analyze" method="post" enctype="multipart/form-data">
+  <form action="/start" method="post" enctype="multipart/form-data" class="container">
     <div class="card">
       <h3>1) 上传简历（支持多选）</h3>
-      <input type="file" name="resumes" multiple accept=".pdf,.docx,.txt,.doc" required />
+      <input id="fileInput" type="file" name="resumes" multiple accept=".pdf,.docx,.txt,.doc" required />
       <div class="muted">一次可传多份（PDF/DOCX/TXT/DOC）。扫描版PDF暂不OCR。</div>
+      <div id="fileList" class="filelist"></div>
+      <div id="totalInfo" class="muted"></div>
     </div>
 
     <div class="card">
@@ -26,12 +36,36 @@
         <div class="col">
           <label>补充说明（可标注必须项）</label><br>
           <textarea name="notes" rows="10" style="width:100%" placeholder="例：&#10;必须：博士学历&#10;必须：有大分子药物研发经验&#10;必须：肿瘤领域&#10;可选：有IND申报经验"></textarea>
-          <div class="muted">规则：以“必须：”“! ”或“[MUST] ”开头的行会被识别为Must-have。</div>
+          <div class="muted">规则：以“必须：/必备：/! /[MUST]”开头的行会被识别为 Must-have。</div>
         </div>
       </div>
     </div>
 
-    <button type="submit">开始分析</button>
+    <button type="submit" class="btn-primary">开始分析</button>
   </form>
+
+  <script>
+    const input = document.getElementById('fileInput');
+    const list  = document.getElementById('fileList');
+    const info  = document.getElementById('totalInfo');
+    function humanSize(n){
+      if(n<1024) return n+' B';
+      if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+      if(n<1024*1024*1024) return (n/1024/1024).toFixed(1)+' MB';
+      return (n/1024/1024/1024).toFixed(1)+' GB';
+    }
+    input.addEventListener('change', ()=>{
+      list.innerHTML = '';
+      let total = 0;
+      [...input.files].forEach(f=>{
+        total += f.size;
+        const div = document.createElement('div');
+        div.className = 'fileitem';
+        div.textContent = `${f.name} · ${humanSize(f.size)}`;
+        list.appendChild(div);
+      });
+      info.textContent = `共 ${input.files.length} 个文件，总大小 ${humanSize(total)}`;
+    });
+  </script>
 </body>
 </html>
