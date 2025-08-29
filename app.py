@@ -6,6 +6,7 @@ from werkzeug.utils import secure_filename
 
 import docx2txt, pdfplumber
 from openai import OpenAI
+from openpyxl import Workbook  # ⬅️ Excel 导出
 
 # ===================== 基础配置（来自环境变量） =====================
 DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
@@ -25,24 +26,55 @@ app.secret_key = os.getenv("FLASK_SECRET", "dev_secret")
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=OPENAI_BASE_URL)
 
 # 批次状态（内存版，个人使用足够）
-BATCHES = {}  # {batch_id: {"jd":str,"notes":str,"must":list,"rows":[...], "done":bool, "csv":BytesIO}}
+BATCHES = {}  # {batch_id: {"jd":str,"notes":str,"must":list,"rows":[...], "done":bool, "csv":BytesIO, "excel":BytesIO}}
 
 ALLOWED_EXT = {".pdf", ".docx", ".txt", ".doc"}
 def allowed(filename: str) -> bool:
     return any(filename.lower().endswith(ext) for ext in ALLOWED_EXT)
 
-# ===================== 解析：以“字节 blob”为输入 =====================
+# ===================== 解析：以“字节 blob”为输入（含 PDF 兜底） =====================
 def parse_text_from_blob(filename: str, blob: bytes) -> str:
+    """
+    尽量从 PDF/DOCX/TXT 提取文本：
+    - PDF: 先 pdfplumber（pdfminer），若为空或过短，再用 pypdfium2 兜底
+    - DOCX: docx2txt
+    - TXT/DOC: 尝试 utf-8 => latin-1
+    """
     name = secure_filename(filename).lower()
     _, ext = os.path.splitext(name)
     content = ""
+
     try:
         if ext == ".pdf":
-            with pdfplumber.open(io.BytesIO(blob)) as pdf:
-                pages = [(p.extract_text() or "") for p in pdf.pages]
-            content = "\n".join(pages)
+            # 1) pdfplumber 优先
+            try:
+                with pdfplumber.open(io.BytesIO(blob)) as pdf:
+                    pages = [(p.extract_text() or "") for p in pdf.pages]
+                content = "\n".join(pages).strip()
+            except Exception:
+                content = ""
+
+            # 2) 内容过短或为空，用 pypdfium2 兜底
+            if len(content) < 40:
+                try:
+                    import pypdfium2 as pdfium
+                    pdf = pdfium.PdfDocument(io.BytesIO(blob))
+                    texts = []
+                    for i in range(len(pdf)):
+                        page = pdf[i]
+                        txtpage = page.get_textpage()
+                        texts.append(txtpage.get_text_range())
+                        txtpage.close()
+                    content = "\n".join(texts).strip()
+                except Exception:
+                    pass
+
         elif ext == ".docx":
-            content = docx2txt.process(io.BytesIO(blob)) or ""
+            try:
+                content = docx2txt.process(io.BytesIO(blob)) or ""
+            except Exception:
+                content = ""
+
         elif ext in [".txt", ".doc"]:
             try:
                 content = blob.decode("utf-8", errors="ignore")
@@ -50,9 +82,11 @@ def parse_text_from_blob(filename: str, blob: bytes) -> str:
                 content = blob.decode("latin-1", errors="ignore")
         else:
             content = ""
+
     except Exception:
         content = ""
 
+    # 清洗 & 截断
     content = re.sub(r"\s+", " ", (content or "")).strip()
     if len(content) > MAX_CONTENT_CHARS:
         content = content[:MAX_CONTENT_CHARS] + "\n[TRUNCATED]"
@@ -237,6 +271,7 @@ def start():
         "rows": [],
         "done": False,
         "csv": None,
+        "excel": None,
     }
 
     def run_batch():
@@ -283,6 +318,27 @@ def start():
                 ]
             )
         BATCHES[batch_id]["csv"] = io.BytesIO(csv_buf.getvalue().encode("utf-8"))
+
+        # 生成 Excel（推荐导出）
+        wb = Workbook(); ws = wb.active
+        ws.append(["文件名","姓名","年龄","教育背景","履历概要","亮点","匹配度","匹配度分析","证据","风险备注"])
+        for r in rows:
+            d = r["data"]
+            ws.append([
+                r["filename"],
+                d.get("name",""),
+                d.get("estimated_age",""),
+                d.get("education_brief",""),
+                d.get("summary",""),
+                " | ".join(d.get("highlights",[])),
+                d.get("overall",0),
+                d.get("fit_analysis",""),
+                " | ".join(d.get("evidence",[])),
+                " | ".join(d.get("risk_notes",[])),
+            ])
+        excel_buf = io.BytesIO(); wb.save(excel_buf); excel_buf.seek(0)
+        BATCHES[batch_id]["excel"] = excel_buf
+
         BATCHES[batch_id]["done"] = True
 
     threading.Thread(target=run_batch, daemon=True).start()
@@ -343,6 +399,20 @@ def download_csv(batch_id):
         as_attachment=True,
         download_name=f"results_{batch_id[:8]}.csv",
         mimetype="text/csv",
+    )
+
+# 下载 Excel
+@app.route("/download_excel/<batch_id>")
+def download_excel(batch_id):
+    b = BATCHES.get(batch_id)
+    if not b or not b.get("excel"):
+        return "Excel not ready", 404
+    b["excel"].seek(0)
+    return send_file(
+        b["excel"],
+        as_attachment=True,
+        download_name=f"results_{batch_id[:8]}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 # 诊断：检查 Key/Endpoint/模型是否可用
