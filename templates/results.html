@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>匹配结果</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial;max-width:1080px;margin:24px auto;padding:0 16px}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #eee;padding:8px;vertical-align:top}
+    .ok{color:green}.err{color:#c00}
+    .tag{display:inline-block;background:#f2f2f2;border-radius:6px;padding:2px 6px;margin:2px}
+    .muted{color:#666}
+    pre{white-space:pre-wrap;word-wrap:break-word;background:#fafafa;padding:8px;border-radius:8px}
+  </style>
+</head>
+<body>
+  <h2>匹配结果</h2>
+  <p class="muted">批次时间：{{ ts }}</p>
+  <p><a href="/download_csv/{{ csv_id }}">⬇ 下载CSV</a> | <a href="/">返回</a></p>
+
+  <h3>JD 概要</h3>
+  <ul class="muted">
+    <li><b>Must:</b> {{ jd.must_have }}</li>
+    <li><b>Nice:</b> {{ jd.nice_have }}</li>
+    <li><b>Skills:</b> {{ jd.skills }}</li>
+    <li><b>Domain/Stage:</b> {{ jd.domain }} / {{ jd.stage }}</li>
+    <li><b>Lang/Loc:</b> {{ jd.lang_loc }}</li>
+    <li><b>Weights:</b> {{ jd.weights }}</li>
+  </ul>
+
+  <table>
+    <thead>
+      <tr>
+        <th>文件名</th>
+        <th>分数</th>
+        <th>维度</th>
+        <th>亮点</th>
+        <th>不足</th>
+        <th>建议</th>
+        <th>风险/备注</th>
+        <th>证据（原文摘录）</th>
+        <th>原始JSON</th>
+        <th>状态</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in results %}
+      <tr>
+        <td>{{ r.filename }}</td>
+        <td><b>{{ r.normalized.overall }}</b></td>
+        <td class="muted">
+          {% for k,v in r.normalized.dimensions.items() %}
+            <span class="tag">{{ k }}: {{ v }}</span>
+          {% endfor %}
+        </td>
+        <td>{% for x in r.normalized.pros %}<div>• {{ x }}</div>{% endfor %}</td>
+        <td>{% for x in r.normalized.gaps %}<div>• {{ x }}</div>{% endfor %}</td>
+        <td>{% for x in r.normalized.next_actions %}<div>• {{ x }}</div>{% endfor %}</td>
+        <td class="muted">{% for x in r.normalized.risk_notes %}<div>• {{ x }}</div>{% endfor %}</td>
+        <td class="muted">
+          {% for x in r.normalized.evidence %}<div>“{{ x }}”</div>{% endfor %}
+        </td>
+        <td><pre>{{ r.raw_json }}</pre></td>
+        <td>{% if r.ok %}<span class="ok">OK</span>{% else %}<span class="err">{{ r.error }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
