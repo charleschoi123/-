@@ -1,0 +1,27 @@
+:root{ --alsos-red:#c41d1d; --alsos-green:#1aa570; --ink:#111; --muted:#666; --line:#eaeaea; }
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,Arial; color:var(--ink); background:#fff; margin:0}
+.container{max-width:1180px;margin:24px auto;padding:0 16px}
+.hero{background:linear-gradient(90deg,var(--alsos-red),#e5433a);color:#fff}
+.hero.small{padding:10px 0}
+.hero .brand{display:flex;align-items:center;gap:14px; max-width:1180px;margin:0 auto;padding:14px 16px}
+.logo{width:44px;height:44px;border-radius:10px;background:#fff;color:var(--alsos-red);display:flex;align-items:center;justify-content:center;font-weight:800}
+h1{font-size:18px;margin:0}
+.tagline{margin:0;font-size:12px;opacity:.9}
+h2{margin:16px 0}
+.card{border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0;background:#fff}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.col{flex:1;min-width:280px}
+textarea,input{font-size:14px}
+.muted{color:var(--muted)}
+.btn,.btn-primary{display:inline-block;padding:8px 14px;border-radius:10px;border:1px solid var(--line);text-decoration:none;color:#fff;background:#333}
+.btn-primary{background:var(--alsos-red);border-color:#b61515}
+.btn:hover,.btn-primary:hover{opacity:.92}
+.actions{display:flex;gap:10px;align-items:center;margin:8px 0}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+th,td{border:1px solid var(--line);padding:8px;vertical-align:top}
+.ok{color:var(--alsos-green);font-weight:600}
+.err{color:var(--alsos-red);font-weight:600}
+.filelist{margin-top:8px}
+.fileitem{padding:4px 6px;border:1px dashed var(--line);border-radius:8px;margin:4px 0;background:#fafafa}
+details summary{cursor:pointer;margin-bottom:8px}
