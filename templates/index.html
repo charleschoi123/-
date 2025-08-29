@@ -2,15 +2,12 @@
 <html lang="zh">
 <head>
   <meta charset="utf-8">
-  <title>简历匹配 · DeepSeek MVP</title>
+  <title>Alsos 批量简历分析AI系统</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>body{font-family:system-ui,Segoe UI,Arial;max-width:960px;margin:24px auto;padding:0 16px}
-  textarea,input,button{font-size:14px} .row{display:flex;gap:16px}
-  .col{flex:1} .card{border:1px solid #eee;border-radius:10px;padding:16px;margin-bottom:16px}
-  .muted{color:#666;font-size:12px}</style>
+  <link href="/static/style.css" rel="stylesheet">
 </head>
 <body>
-  <h2>简历批量匹配（DeepSeek · 自用MVP）</h2>
+  <h2>Alsos 批量简历分析AI系统</h2>
 
   <form action="/analyze" method="post" enctype="multipart/form-data">
     <div class="card">
@@ -20,55 +17,21 @@
     </div>
 
     <div class="card">
-      <h3>2) JD 要点（可只填必须项 + 技能）</h3>
+      <h3>2) JD 与补充说明（通用全行业）</h3>
       <div class="row">
         <div class="col">
-          <label>JD 原文（可空，用于参考）</label><br>
-          <textarea name="jd_raw" rows="6" style="width:100%" placeholder="粘贴原始JD（可选）"></textarea>
+          <label>JD（粘贴原文即可）</label><br>
+          <textarea name="jd_raw" rows="10" style="width:100%" placeholder="Paste the JD here..."></textarea>
         </div>
         <div class="col">
-          <label>Must-have（每行一条）</label><br>
-          <textarea name="must_have" rows="6" style="width:100%" placeholder="例：有IND主导申报经验&#10;例：GLP-1 项目经历"></textarea>
+          <label>补充说明（可标注必须项）</label><br>
+          <textarea name="notes" rows="10" style="width:100%" placeholder="例：&#10;必须：博士学历&#10;必须：有大分子药物研发经验&#10;必须：肿瘤领域&#10;可选：有IND申报经验"></textarea>
+          <div class="muted">规则：以“必须：”“! ”或“[MUST] ”开头的行会被识别为Must-have。</div>
         </div>
       </div>
-      <div class="row">
-        <div class="col">
-          <label>Nice-to-have（每行一条）</label><br>
-          <textarea name="nice_have" rows="4" style="width:100%"></textarea>
-        </div>
-        <div class="col">
-          <label>技能列表（逗号分隔）</label><br>
-          <input name="skills" style="width:100%" placeholder="ADC, CMC, IND, PK/PD, GLP-1">
-        </div>
-      </div>
-      <div class="row">
-        <div class="col">
-          <label>领域/治疗方向</label><br>
-          <input name="domain" style="width:100%" placeholder="Oncology / Immuno-oncology / GLP-1 等">
-        </div>
-        <div class="col">
-          <label>阶段</label><br>
-          <input name="stage" style="width:100%" placeholder="PCC→IND→I/II/III→BLA">
-        </div>
-        <div class="col">
-          <label>语言/地点</label><br>
-          <input name="lang_loc" style="width:100%" placeholder="英文流利；上海/苏州优先">
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>3) 评分权重（JSON，可直接用默认）</h3>
-      <textarea name="weights_json" rows="4" style="width:100%" id="weights"></textarea>
-      <div class="muted">默认：{"skills":0.40,"domain":0.20,"stage":0.15,"language":0.10,"leadership":0.10,"compliance":0.05}</div>
     </div>
 
     <button type="submit">开始分析</button>
   </form>
-
-  <script>
-    const def = {{ default_weights|safe }};
-    document.getElementById('weights').value = JSON.stringify(def);
-  </script>
 </body>
 </html>
