@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: resume-match-mvp
+    name: alsos-resume-batch
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app -k gthread --threads 4 --timeout 120
+    startCommand: gunicorn app:app -k gthread --threads 4 --timeout 300
     envVars:
       - key: DEEPSEEK_API_KEY
         sync: false
@@ -12,6 +12,8 @@ services:
         value: https://api.deepseek.com
       - key: LLM_MODEL_CHEAP
         value: deepseek-chat
+      - key: MAX_WORKERS
+        value: "3"
       - key: MAX_FILES
         value: "150"
       - key: MAX_CONTENT_CHARS
